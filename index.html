@@ -1,0 +1,668 @@
+import React, { useState, useEffect } from 'react';
+import { Calendar as CalendarIcon, CheckCircle, PieChart, Plus, Trash2, Snowflake, BookOpen, Target, ChevronLeft, ArrowRight, AlertCircle, Settings, Edit3, X, Flag, ClipboardList } from 'lucide-react';
+
+// --- Components ---
+
+// 1. Main Action Button (Wide)
+const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false, type = 'button' }) => {
+  const baseStyle = "w-full px-4 py-3 rounded-xl font-medium transition-all duration-200 flex items-center justify-center gap-2 active:scale-95 touch-manipulation";
+  const variants = {
+    primary: "bg-blue-600 text-white hover:bg-blue-700 shadow-md disabled:bg-slate-300 disabled:shadow-none",
+    secondary: "bg-white text-slate-700 border border-slate-200 hover:bg-slate-50 disabled:bg-slate-100",
+    danger: "bg-red-50 text-red-600 hover:bg-red-100 border border-red-100",
+    ghost: "text-slate-500 hover:text-slate-700 hover:bg-slate-100 w-auto px-2"
+  };
+
+  return (
+    <button 
+      type={type}
+      onClick={onClick} 
+      className={`${baseStyle} ${variants[variant]} ${className}`}
+      disabled={disabled}
+    >
+      {children}
+    </button>
+  );
+};
+
+// 2. Header Icon Button (Small, Round)
+const IconButton = ({ children, onClick, className = '', color = 'text-slate-500' }) => (
+  <button 
+    onClick={onClick}
+    className={`p-2 rounded-full hover:bg-slate-100 active:bg-slate-200 transition-colors shrink-0 ${color} ${className}`}
+    type="button"
+  >
+    {children}
+  </button>
+);
+
+const Card = ({ children, className = '', onClick }) => (
+  <div 
+    onClick={onClick}
+    className={`bg-white rounded-2xl shadow-sm border border-slate-200 p-5 transition-all duration-200 ${onClick ? 'cursor-pointer active:bg-slate-50 active:scale-[0.99]' : ''} ${className}`}
+  >
+    {children}
+  </div>
+);
+
+// --- Utilities ---
+
+const getTodayString = () => {
+  const date = new Date();
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().split('T')[0];
+};
+
+const getWeekDays = () => {
+  const today = new Date();
+  const day = today.getDay(); 
+  const diff = today.getDate() - day; 
+  
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(today);
+    d.setDate(diff + i);
+    const offset = d.getTimezoneOffset() * 60000;
+    days.push(new Date(d.getTime() - offset).toISOString().split('T')[0]);
+  }
+  return days; 
+};
+
+// --- Main App ---
+
+export default function App() {
+  const [plans, setPlans] = useState([]);
+  const [activePlanId, setActivePlanId] = useState(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [todayInput, setTodayInput] = useState('');
+  const [selectedDate, setSelectedDate] = useState(getTodayString());
+
+  // Initial Load
+  useEffect(() => {
+    const savedPlans = localStorage.getItem('winterMissionPlans');
+    if (savedPlans) {
+      try {
+        setPlans(JSON.parse(savedPlans));
+      } catch (e) {
+        console.error("Failed to parse plans", e);
+        setPlans([]);
+      }
+    }
+  }, []);
+
+  // Save on Change
+  useEffect(() => {
+    localStorage.setItem('winterMissionPlans', JSON.stringify(plans));
+  }, [plans]);
+
+  // Crash Prevention
+  useEffect(() => {
+    if (activePlanId && !plans.find(p => p.id === activePlanId)) {
+      setActivePlanId(null);
+      setIsEditing(false);
+    }
+  }, [plans, activePlanId]);
+
+  // --- Logic ---
+
+  const calculateStats = (plan, targetDate = getTodayString()) => {
+    if (!plan) return {
+        totalDone: 0, remainingAmount: 0, activeDaysRemaining: 0,
+        dailyTarget: 0, percent: 0, hasLoggedToday: false,
+        isStudyDay: false, isOverloaded: false, weeklyGoal: 0
+    };
+
+    const totalDone = plan.logs?.reduce((acc, log) => acc + log.amount, 0) || 0;
+    const remainingAmount = Math.max(0, plan.totalAmount - totalDone);
+    
+    const start = new Date(plan.startDate);
+    const end = new Date(plan.endDate);
+    const current = new Date(targetDate);
+    
+    start.setHours(0,0,0,0);
+    end.setHours(0,0,0,0);
+    current.setHours(0,0,0,0);
+
+    let activeDaysRemaining = 0;
+    let tempDate = new Date(current);
+    
+    if (current <= end) {
+        const loopEnd = new Date(end);
+        let safetyCount = 0;
+        while (tempDate <= loopEnd && safetyCount < 366) {
+            const dayNum = tempDate.getDay();
+            if (plan.studyDays.includes(dayNum)) {
+                activeDaysRemaining++;
+            }
+            tempDate.setDate(tempDate.getDate() + 1);
+            safetyCount++;
+        }
+    }
+
+    const hasLoggedToday = plan.logs?.some(log => log.date === targetDate);
+    const isStudyDay = plan.studyDays.includes(new Date(targetDate).getDay());
+
+    let dailyTarget = 0;
+    if (remainingAmount > 0 && activeDaysRemaining > 0 && isStudyDay) {
+        dailyTarget = Math.ceil(remainingAmount / activeDaysRemaining);
+    }
+
+    const percent = Math.min(100, Math.round((totalDone / plan.totalAmount) * 100));
+    const isOverloaded = dailyTarget > (plan.maxDaily || 9999);
+
+    // --- 주간 목표 계산 (이번 주 토요일까지 목표) ---
+    const today = new Date(targetDate);
+    const dayOfWeek = today.getDay(); 
+    const daysUntilSaturday = 6 - dayOfWeek;
+    let remainingStudyDaysInWeek = 0;
+    
+    for (let i = 0; i <= daysUntilSaturday; i++) {
+        const d = new Date(today);
+        d.setDate(today.getDate() + i);
+        if (d > end) break;
+        if (plan.studyDays.includes(d.getDay())) {
+            remainingStudyDaysInWeek++;
+        }
+    }
+
+    let weeklyGoal = totalDone + (remainingStudyDaysInWeek * dailyTarget);
+    if (weeklyGoal > plan.totalAmount) weeklyGoal = plan.totalAmount;
+
+    return {
+      totalDone,
+      remainingAmount,
+      activeDaysRemaining,
+      dailyTarget,
+      percent,
+      hasLoggedToday,
+      isStudyDay,
+      isOverloaded,
+      weeklyGoal
+    };
+  };
+
+  // Actions
+  const handleCreatePlan = (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const selectedDays = [];
+    ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'].forEach((day, idx) => {
+        if (formData.get(day)) selectedDays.push(idx);
+    });
+
+    if (selectedDays.length === 0) {
+        alert('최소한 하루의 공부 요일은 선택해야 해요!');
+        return;
+    }
+
+    const newPlan = {
+      id: Date.now(),
+      title: formData.get('title'),
+      totalAmount: parseInt(formData.get('totalAmount')),
+      unit: formData.get('unit'),
+      startDate: formData.get('startDate'),
+      endDate: formData.get('endDate'),
+      studyDays: selectedDays,
+      maxDaily: parseInt(formData.get('maxDaily')) || 9999,
+      logs: []
+    };
+    setPlans([...plans, newPlan]);
+    setIsCreating(false);
+  };
+
+  const handleUpdatePlan = (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const selectedDays = [];
+    ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'].forEach((day, idx) => {
+        if (formData.get(day)) selectedDays.push(idx);
+    });
+
+    if (selectedDays.length === 0) {
+        alert('최소한 하루의 공부 요일은 선택해야 해요!');
+        return;
+    }
+
+    const updatedPlan = {
+        ...plans.find(p => p.id === activePlanId),
+        title: formData.get('title'),
+        totalAmount: parseInt(formData.get('totalAmount')),
+        unit: formData.get('unit'),
+        startDate: formData.get('startDate'),
+        endDate: formData.get('endDate'),
+        studyDays: selectedDays,
+        maxDaily: parseInt(formData.get('maxDaily')) || 9999,
+    };
+
+    setPlans(plans.map(p => p.id === activePlanId ? updatedPlan : p));
+    setIsEditing(false);
+  };
+
+  const handleDeletePlan = (id) => {
+    if (window.confirm('정말 삭제하시겠습니까? 복구할 수 없습니다.')) {
+      setPlans(prevPlans => prevPlans.filter(p => p.id !== id));
+      if (activePlanId === id) {
+          setActivePlanId(null);
+          setIsEditing(false);
+      }
+    }
+  };
+
+  const handleAddLog = (planId) => {
+    const amount = parseInt(todayInput);
+    if (isNaN(amount)) return;
+    
+    setPlans(plans.map(plan => {
+      if (plan.id !== planId) return plan;
+      const otherLogs = plan.logs.filter(log => log.date !== selectedDate);
+      if (amount === 0) {
+        return { ...plan, logs: [...otherLogs] };
+      }
+      return {
+        ...plan,
+        logs: [...otherLogs, { date: selectedDate, amount }]
+      };
+    }));
+    
+    setTodayInput('');
+  };
+
+  // --- Views ---
+
+  const PlanForm = ({ onSubmit, initialData = null, onCancel }) => (
+    <div className="animate-fade-in pb-10">
+      <div className="relative py-3 mb-4 flex items-center justify-between border-b border-slate-200">
+        <IconButton onClick={onCancel} className="text-slate-600">
+            <ChevronLeft size={24} />
+        </IconButton>
+        <span className="font-bold text-slate-800 text-lg">{initialData ? '계획 수정' : '새 계획'}</span>
+        <div className="w-10"></div>
+      </div>
+
+      <form onSubmit={onSubmit} className="space-y-4 pt-1">
+        <Card>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-bold text-slate-800 mb-2">목표 이름</label>
+              <input required name="title" defaultValue={initialData?.title} type="text" placeholder="예: 수학의 정석" className="w-full bg-slate-50 border border-slate-300 rounded-xl p-3.5 focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
+            </div>
+            
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-bold text-slate-800 mb-2">총 분량</label>
+                <input required name="totalAmount" defaultValue={initialData?.totalAmount} type="number" min="1" placeholder="300" className="w-full bg-slate-50 border border-slate-300 rounded-xl p-3.5 focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-slate-800 mb-2">단위</label>
+                <input required name="unit" defaultValue={initialData?.unit} type="text" placeholder="쪽" className="w-full bg-slate-50 border border-slate-300 rounded-xl p-3.5 focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
+              </div>
+            </div>
+
+            <div>
+                <label className="block text-sm font-bold text-slate-800 mb-2">공부 요일</label>
+                <div className="flex justify-between gap-1 bg-slate-50 p-2 rounded-xl border border-slate-300">
+                    {['일', '월', '화', '수', '목', '금', '토'].map((day, idx) => (
+                        <label key={idx} className="relative cursor-pointer flex-1">
+                            <input 
+                                type="checkbox" 
+                                name={['sun','mon','tue','wed','thu','fri','sat'][idx]} 
+                                defaultChecked={initialData ? initialData.studyDays.includes(idx) : (idx !== 0 && idx !== 6)} 
+                                className="peer sr-only" 
+                            />
+                            <div className="h-9 flex items-center justify-center rounded-lg text-sm font-bold text-slate-400 peer-checked:bg-blue-600 peer-checked:text-white transition-all">
+                                {day}
+                            </div>
+                        </label>
+                    ))}
+                </div>
+            </div>
+
+            <div>
+                <label className="block text-sm font-bold text-slate-800 mb-2">하루 최대 한계 (선택)</label>
+                <div className="flex gap-2 items-center">
+                    <input name="maxDaily" defaultValue={initialData?.maxDaily !== 9999 ? initialData?.maxDaily : ''} type="number" placeholder="무제한" className="flex-1 bg-slate-50 border border-slate-300 rounded-xl p-3.5 focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
+                    <span className="text-slate-600 text-sm font-bold whitespace-nowrap">까지</span>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 pt-2">
+              <div>
+                <label className="block text-sm font-bold text-slate-800 mb-2">시작일</label>
+                <input required name="startDate" defaultValue={initialData?.startDate || getTodayString()} type="date" className="w-full bg-slate-50 border border-slate-300 rounded-xl p-3.5 focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-slate-800 mb-2">종료일</label>
+                <input required name="endDate" defaultValue={initialData?.endDate} type="date" className="w-full bg-slate-50 border border-slate-300 rounded-xl p-3.5 focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        <div className="mt-8 pb-8">
+            <Button type="submit" className="w-full shadow-lg shadow-blue-200 py-4 text-lg bg-blue-600 hover:bg-blue-700 text-white font-bold">
+                {initialData ? '수정 완료' : '계획 시작하기'}
+            </Button>
+        </div>
+      </form>
+    </div>
+  );
+
+  const PlanDetailView = ({ plan }) => {
+    if (!plan) return null;
+
+    const stats = calculateStats(plan, selectedDate);
+    const isFinished = stats.remainingAmount <= 0;
+    const isToday = selectedDate === getTodayString();
+
+    return (
+      <div className="animate-fade-in pb-10 space-y-5">
+        <div className="relative py-3 border-b border-slate-200 mb-2 flex items-center justify-between">
+            <IconButton onClick={() => { setActivePlanId(null); setTodayInput(''); }} className="text-slate-600">
+                <ChevronLeft size={24} />
+            </IconButton>
+            
+            <span className="font-bold text-slate-800 text-lg truncate flex-1 text-center px-4">
+                {plan.title}
+            </span>
+
+            <div className="flex items-center gap-1">
+                <IconButton onClick={() => setIsEditing(true)} className="text-slate-600 hover:bg-slate-100">
+                    <Edit3 size={20} />
+                </IconButton>
+                <IconButton onClick={() => handleDeletePlan(plan.id)} className="text-red-500 hover:bg-red-50">
+                    <Trash2 size={20} />
+                </IconButton>
+            </div>
+        </div>
+
+        <Card className="!bg-blue-600 text-white border-none overflow-hidden relative shadow-lg shadow-blue-200">
+            <div className="relative z-10">
+                <div className="flex justify-between items-start mb-6">
+                    <div>
+                        <p className="text-blue-100 font-medium text-sm mb-1">전체 진행률</p>
+                        <h2 className="text-4xl font-bold flex items-end gap-2">
+                            {stats.percent}<span className="text-2xl opacity-70 mb-1">%</span>
+                        </h2>
+                    </div>
+                    <div className="text-right bg-blue-500/30 p-2 rounded-lg backdrop-blur-sm">
+                         <p className="text-blue-100 text-xs mb-1">남은 학습일</p>
+                         <p className="font-bold text-lg leading-none">{stats.activeDaysRemaining}일</p>
+                    </div>
+                </div>
+
+                <div className="space-y-2">
+                    <div className="flex justify-between text-xs text-blue-100 font-medium px-1">
+                        <span>0</span>
+                        <span>현재 {stats.totalDone}</span>
+                        <span>목표 {plan.totalAmount}</span>
+                    </div>
+                    <div className="w-full bg-blue-900/40 rounded-full h-3 backdrop-blur-sm overflow-hidden">
+                        <div 
+                            className="bg-white h-full rounded-full transition-all duration-700 ease-out relative" 
+                            style={{ width: `${stats.percent}%` }}
+                        >
+                            <div className="absolute top-0 right-0 bottom-0 w-2 bg-white/50 blur-[2px]"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div className="absolute top-0 right-0 w-48 h-48 bg-white/10 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
+            <div className="absolute bottom-0 left-0 w-32 h-32 bg-blue-400/20 rounded-full blur-2xl -ml-10 -mb-10 pointer-events-none"></div>
+        </Card>
+
+        {!isFinished && (
+            <Card className={`border-2 shadow-sm ${stats.isStudyDay ? 'border-indigo-200 bg-indigo-50' : 'border-slate-200 bg-slate-50'}`}>
+                <div className="flex flex-col gap-4">
+                    <div className="text-center pb-2 border-b border-indigo-200">
+                        <div className="flex items-center justify-center gap-2 mb-1">
+                            <Target className={`w-5 h-5 ${stats.isStudyDay ? 'text-indigo-600' : 'text-slate-400'}`} />
+                            <h3 className="font-bold text-lg text-slate-800">
+                                {isToday ? "오늘의 목표" : `${new Date(selectedDate).getMonth()+1}월 ${new Date(selectedDate).getDate()}일 목표`}
+                            </h3>
+                        </div>
+                        
+                        {stats.isStudyDay ? (
+                            <>
+                                <p className="text-slate-700 text-sm font-medium">
+                                    <span className="text-indigo-600 font-black text-3xl mx-1 align-middle">{stats.dailyTarget}</span>
+                                    {plan.unit}
+                                </p>
+                                {stats.isOverloaded && (
+                                    <div className="mt-2 text-xs font-bold text-orange-700 bg-orange-100 py-1.5 px-3 rounded-lg inline-flex items-center gap-1 border border-orange-200">
+                                        <AlertCircle size={14} />
+                                        <span>최대량({plan.maxDaily}) 초과! 수정 권장</span>
+                                    </div>
+                                )}
+                            </>
+                        ) : (
+                            <p className="text-slate-500 font-medium py-4 flex flex-col items-center gap-2">
+                                <span className="text-2xl">☕️</span>
+                                <span>오늘은 쉬어가는 날입니다</span>
+                            </p>
+                        )}
+                    </div>
+
+                    {stats.isStudyDay && (
+                        <div className="bg-white p-4 rounded-xl shadow-sm border border-indigo-200">
+                            <div className="flex justify-between items-center mb-2 px-1">
+                                <label className="text-sm font-bold text-slate-700">실제 공부량</label>
+                                <span className={`text-xs font-bold px-2 py-0.5 rounded-md ${stats.hasLoggedToday ? 'text-indigo-600 bg-indigo-100' : 'text-slate-500 bg-slate-100'}`}>
+                                    {stats.hasLoggedToday ? "입력완료" : "미입력"}
+                                </span>
+                            </div>
+                            <div className="flex items-center gap-2 mb-3">
+                                <input 
+                                    type="number" 
+                                    value={todayInput}
+                                    onChange={(e) => setTodayInput(e.target.value)}
+                                    placeholder="0"
+                                    className="w-full bg-white border border-slate-300 rounded-xl py-3 px-4 text-center font-bold text-xl text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none transition-all placeholder:text-slate-400"
+                                />
+                                <span className="text-slate-700 font-bold shrink-0 text-lg">{plan.unit}</span>
+                            </div>
+                            <Button onClick={() => handleAddLog(plan.id)} disabled={!todayInput} variant="primary" className="!bg-indigo-600 hover:bg-indigo-700 w-full shadow-md shadow-indigo-200 text-white font-bold">
+                                <CheckCircle size={18} /> {stats.hasLoggedToday ? '수정하기' : '기록하기'}
+                            </Button>
+                        </div>
+                    )}
+                </div>
+            </Card>
+        )}
+
+        <div className="pt-2">
+            <h3 className="font-bold text-slate-700 mb-3 flex items-center gap-2 px-1">
+                <BookOpen size={18} className="text-slate-500"/>
+                최근 기록
+            </h3>
+            <div className="space-y-3">
+                {[...plan.logs].reverse().slice(0, 5).map((log, idx) => (
+                    <div key={idx} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex justify-between items-center">
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center font-bold text-xs">
+                                {log.date.slice(5).replace('-', '/')}
+                            </div>
+                            <div>
+                                <p className="font-bold text-slate-800 text-lg">{log.amount}<span className="text-sm font-normal text-slate-500 ml-1">{plan.unit}</span></p>
+                            </div>
+                        </div>
+                        <span className="text-xs font-bold text-slate-500 bg-slate-100 px-2 py-1 rounded-md">완료</span>
+                    </div>
+                ))}
+                {plan.logs.length === 0 && (
+                    <div className="text-center py-6 text-slate-500 text-sm bg-slate-50 rounded-xl border border-dashed border-slate-300">
+                        아직 기록이 없습니다.
+                    </div>
+                )}
+            </div>
+        </div>
+      </div>
+    );
+  };
+
+  const WeeklyCalendar = () => {
+    const weekDays = getWeekDays();
+    const dayLabels = ['일', '월', '화', '수', '목', '금', '토'];
+
+    return (
+        <div className="bg-white rounded-b-3xl shadow-sm border-b border-slate-200 p-4 mb-4 pb-6">
+            <div className="flex justify-between items-center mb-4 px-2">
+                <h2 className="text-lg font-bold text-slate-800">이번 주 일정</h2>
+                <span className="text-xs font-medium text-slate-500 bg-slate-100 px-2 py-1 rounded-full">{new Date().getMonth() + 1}월</span>
+            </div>
+            <div className="grid grid-cols-7 gap-2">
+                {weekDays.map((dateStr, idx) => {
+                    const date = new Date(dateStr);
+                    const dayNum = date.getDate();
+                    const isSelected = dateStr === selectedDate;
+                    const isToday = dateStr === getTodayString();
+                    
+                    const dayTasks = plans.filter(p => {
+                        const s = calculateStats(p, dateStr);
+                        return s.isStudyDay && s.remainingAmount > 0;
+                    });
+
+                    let textColor = "text-slate-600";
+                    if (idx === 0) textColor = "text-red-500"; 
+                    else if (idx === 6) textColor = "text-blue-500"; 
+
+                    return (
+                        <div key={dateStr} onClick={() => setSelectedDate(dateStr)} className="flex flex-col items-center gap-1 cursor-pointer group">
+                            <span className={`text-xs font-medium ${textColor} opacity-80`}>{dayLabels[idx]}</span>
+                            <div className={`
+                                w-9 h-9 flex items-center justify-center rounded-full text-sm font-bold transition-all relative
+                                ${isSelected ? 'bg-blue-600 text-white shadow-lg shadow-blue-200 scale-110' : 'bg-slate-50 text-slate-700 hover:bg-slate-100'}
+                                ${isToday && !isSelected ? 'ring-2 ring-blue-400 ring-offset-2' : ''}
+                            `}>
+                                {dayNum}
+                            </div>
+                            <div className="flex flex-col gap-0.5 mt-1 w-full px-0.5 min-h-[12px]">
+                                {dayTasks.slice(0, 2).map((task, i) => (
+                                    <span key={task.id} className="text-[9px] leading-tight text-slate-500 text-center truncate w-full block">
+                                        {task.title}
+                                    </span>
+                                ))}
+                                {dayTasks.length > 2 && (
+                                    <span className="text-[9px] leading-tight text-slate-400 text-center block">+</span>
+                                )}
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
+  };
+
+  const MainListView = () => (
+    <div className="animate-fade-in pb-24">
+        <WeeklyCalendar />
+        
+        <div className="flex items-center justify-between mb-3 px-2">
+             <h3 className="font-bold text-slate-700 flex items-center gap-2">
+                <Target size={18} className="text-slate-400" />
+                {selectedDate === getTodayString() ? "오늘의 할 일" : `${new Date(selectedDate).getDate()}일의 할 일`}
+            </h3>
+            <span className="text-xs font-medium text-slate-400 bg-slate-100 px-2 py-1 rounded-full">
+                {plans.length}개의 미션
+            </span>
+        </div>
+
+        {plans.length === 0 ? (
+            <div className="text-center py-16 px-4 bg-white rounded-3xl border border-dashed border-slate-200 mt-2 mx-2">
+                <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <ClipboardList className="w-8 h-8 text-blue-300" />
+                </div>
+                <h3 className="text-lg font-bold text-slate-700">등록된 계획이 없어요</h3>
+                <p className="text-slate-400 text-sm mb-6">아래 + 버튼을 눌러<br/>첫 번째 목표를 세워보세요!</p>
+            </div>
+        ) : (
+            <div className="space-y-3 px-2">
+                {plans.map(plan => {
+                    const stats = calculateStats(plan, selectedDate);
+                    
+                    if (!stats.isStudyDay) {
+                         return (
+                            <Card key={plan.id} onClick={() => setActivePlanId(plan.id)} className="bg-slate-50/50 border-dashed border-slate-200">
+                                <div className="flex justify-between items-center opacity-60">
+                                    <div>
+                                        <h3 className="font-bold text-lg text-slate-600 line-clamp-1">{plan.title}</h3>
+                                        <span className="text-xs text-slate-400 font-medium">오늘은 쉬는 날</span>
+                                    </div>
+                                    <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center">
+                                        <div className="w-2 h-2 rounded-full bg-slate-400"></div>
+                                    </div>
+                                </div>
+                            </Card>
+                        );
+                    }
+
+                    return (
+                        <Card key={plan.id} onClick={() => setActivePlanId(plan.id)} className="active:scale-[0.98] border-l-4 border-l-blue-500 shadow-sm hover:shadow-md transition-shadow border-slate-100 relative overflow-hidden">
+                            <div className="flex justify-between items-start mb-3">
+                                <h3 className="font-bold text-lg text-slate-800 line-clamp-1">{plan.title}</h3>
+                                <div className={`text-xs font-bold px-2 py-1 rounded-lg ${stats.percent === 100 ? 'bg-green-100 text-green-700' : 'bg-blue-50 text-blue-600'}`}>
+                                    {stats.percent}%
+                                </div>
+                            </div>
+                            
+                            <div className="flex items-end gap-1 mb-4">
+                                <span className={`text-3xl font-black ${stats.isOverloaded ? 'text-orange-500' : 'text-slate-800'}`}>
+                                    {stats.dailyTarget}
+                                </span>
+                                <span className="text-sm font-medium text-slate-500 mb-1.5">{plan.unit}</span>
+                                {stats.isOverloaded && <AlertCircle size={16} className="text-orange-500 mb-2 ml-1" />}
+                                <span className="text-xs text-slate-400 mb-1.5 ml-auto">오늘 목표량</span>
+                            </div>
+
+                            <div className="w-full bg-slate-100 rounded-full h-2 mb-3">
+                                <div className={`h-full rounded-full transition-all duration-500 ${stats.isOverloaded ? 'bg-orange-400' : 'bg-blue-500'}`} style={{ width: `${stats.percent}%` }}></div>
+                            </div>
+
+                            <div className="bg-slate-50 -mx-5 -mb-5 p-3 px-5 border-t border-slate-100 flex items-center gap-2 text-sm text-slate-600">
+                                <Flag size={14} className="text-blue-500 fill-blue-500" />
+                                <span className="font-medium">
+                                    이번 주 <strong className="text-slate-800">{stats.weeklyGoal}{plan.unit}</strong>까지 완료하기
+                                </span>
+                            </div>
+                        </Card>
+                    );
+                })}
+            </div>
+        )}
+
+        <div className="fixed bottom-6 right-4 left-4 z-20 max-w-md mx-auto pointer-events-none">
+            <div className="flex justify-end pointer-events-auto">
+                <button 
+                    onClick={() => setIsCreating(true)}
+                    className="w-14 h-14 bg-blue-600 text-white rounded-full shadow-lg shadow-blue-300 flex items-center justify-center hover:bg-blue-700 active:scale-90 transition-transform"
+                >
+                    <Plus size={28} />
+                </button>
+            </div>
+        </div>
+    </div>
+  );
+
+  const activePlan = plans.find(p => p.id === activePlanId);
+
+  return (
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 selection:bg-blue-100">
+        <div className="max-w-md mx-auto min-h-screen bg-slate-50 shadow-2xl shadow-slate-200/50 relative px-4">
+            {isCreating ? (
+                <PlanForm onSubmit={handleCreatePlan} onCancel={() => setIsCreating(false)} />
+            ) : isEditing && activePlan ? (
+                <PlanForm 
+                    onSubmit={handleUpdatePlan} 
+                    onCancel={() => setIsEditing(false)} 
+                    initialData={activePlan}
+                />
+            ) : activePlanId && activePlan ? (
+                <PlanDetailView plan={activePlan} />
+            ) : (
+                <MainListView />
+            )}
+        </div>
+    </div>
+  );
+}
